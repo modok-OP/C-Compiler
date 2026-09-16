@@ -1,0 +1,44 @@
+﻿# Binaries and executables
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+
+# Object files and static libraries
+*.o
+*.obj
+*.a
+*.lib
+
+# Build directory artifacts (preserve directory structure)
+build/*
+!build/.gitkeep
+
+# Temporary and backup files
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
+
+# IDE and editor files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosv
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# OS-specific files
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+.BIN/
+.DS_Store
+
+# Logs
+*.log
