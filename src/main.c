@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include "token.h"
 
 int main(int argc, char *argv[]) {
     /* 1 & 2: Compiler program startup and banner */

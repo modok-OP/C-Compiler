@@ -8,8 +8,9 @@ INCDIR = include
 BUILDDIR = build
 TARGET = compiler.exe
 
-# Sources and Objects
+# Sources, Headers, and Objects
 SRCS = $(wildcard $(SRCDIR)/*.c)
+HEADERS = $(wildcard $(INCDIR)/*.h)
 OBJS = $(patsubst $(SRCDIR)/%.c, $(BUILDDIR)/%.o, $(SRCS))
 
 # Default target
@@ -20,7 +21,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
 # Compile source files to object files
-$(BUILDDIR)/%.o: $(SRCDIR)/%.c
+$(BUILDDIR)/%.o: $(SRCDIR)/%.c $(HEADERS)
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
