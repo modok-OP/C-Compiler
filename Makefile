@@ -13,6 +13,7 @@ TEST_STMT = $(BUILDDIR)/test_statements.exe
 TEST_PROG = $(BUILDDIR)/test_program.exe
 TEST_SYM = $(BUILDDIR)/test_symbol_table.exe
 TEST_SCOPE = $(BUILDDIR)/test_scope_analysis.exe
+TEST_TYPE = $(BUILDDIR)/test_type_system.exe
 
 # Sources, Headers, and Objects
 SRCS = $(wildcard $(SRCDIR)/*.c)
@@ -79,6 +80,14 @@ $(TEST_SCOPE): tests/semantic/test_scope_analysis.c $(BUILDDIR)/semantic.o $(BUI
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+# Build and run Type System test
+test_type_system: $(TEST_TYPE)
+	$(TEST_TYPE)
+
+$(TEST_TYPE): tests/semantic/test_type_system.c $(BUILDDIR)/type_system.o $(BUILDDIR)/token.o $(BUILDDIR)/ast.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
 # Clean target
 clean:
 	-cmd /c "if exist $(BUILDDIR)\*.o del /q /f $(BUILDDIR)\*.o"
@@ -86,4 +95,4 @@ clean:
 	-cmd /c "if exist $(TARGET) del /q /f $(TARGET)"
 	@echo Clean complete.
 
-.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis
+.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis test_type_system
