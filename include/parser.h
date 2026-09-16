@@ -23,13 +23,9 @@ Parser *parser_create(Lexer *lexer);
 void parser_destroy(Parser *parser);
 
 /*
- * Expression parsing entry point (top-level expression -> assignment_expression)
+ * Expression parsing entry points
  */
 ASTNode *parser_parse_expression(Parser *parser);
-
-/*
- * Recursive descent parsing functions matching the frozen grammar hierarchy
- */
 ASTNode *parser_parse_assignment_expr(Parser *parser);
 ASTNode *parser_parse_logical_or_expr(Parser *parser);
 ASTNode *parser_parse_logical_and_expr(Parser *parser);
@@ -41,5 +37,20 @@ ASTNode *parser_parse_unary_expr(Parser *parser);
 ASTNode *parser_parse_cast_expr(Parser *parser);
 ASTNode *parser_parse_postfix_expr(Parser *parser);
 ASTNode *parser_parse_primary_expr(Parser *parser);
+
+/*
+ * Declarations and Statements parsing entry points (Stage 5)
+ */
+int parser_parse_declaration_list(Parser *parser, ASTNode ***out_decls, int *out_count);
+ASTNode *parser_parse_declaration_no_semicolon(Parser *parser);
+ASTNode *parser_parse_statement(Parser *parser);
+ASTNode *parser_parse_block(Parser *parser);
+ASTNode *parser_parse_if_stmt(Parser *parser);
+ASTNode *parser_parse_while_stmt(Parser *parser);
+ASTNode *parser_parse_do_while_stmt(Parser *parser);
+ASTNode *parser_parse_for_stmt(Parser *parser);
+ASTNode *parser_parse_return_stmt(Parser *parser);
+ASTNode *parser_parse_break_stmt(Parser *parser);
+ASTNode *parser_parse_continue_stmt(Parser *parser);
 
 #endif /* PARSER_H */

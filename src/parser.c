@@ -130,17 +130,12 @@ static char *unescape_string_literal(const char *lexeme) {
 }
 
 /*
- * Entry point: expression -> assignment_expression
+ * Expression parsing entry points
  */
 ASTNode *parser_parse_expression(Parser *parser) {
     return parser_parse_assignment_expr(parser);
 }
 
-/*
- * assignment_expression -> logical_or_expression assignment_tail
- * assignment_tail -> assignment_operator assignment_expression | ε
- * (Right-associative)
- */
 ASTNode *parser_parse_assignment_expr(Parser *parser) {
     ASTNode *left = parser_parse_logical_or_expr(parser);
     if (!left) return NULL;
@@ -161,10 +156,6 @@ ASTNode *parser_parse_assignment_expr(Parser *parser) {
     return left;
 }
 
-/*
- * logical_or_expression -> logical_and_expression ('||' logical_and_expression)*
- * (Left-associative)
- */
 ASTNode *parser_parse_logical_or_expr(Parser *parser) {
     ASTNode *left = parser_parse_logical_and_expr(parser);
     if (!left) return NULL;
@@ -184,10 +175,6 @@ ASTNode *parser_parse_logical_or_expr(Parser *parser) {
     return left;
 }
 
-/*
- * logical_and_expression -> equality_expression ('&&' equality_expression)*
- * (Left-associative)
- */
 ASTNode *parser_parse_logical_and_expr(Parser *parser) {
     ASTNode *left = parser_parse_equality_expr(parser);
     if (!left) return NULL;
@@ -207,10 +194,6 @@ ASTNode *parser_parse_logical_and_expr(Parser *parser) {
     return left;
 }
 
-/*
- * equality_expression -> relational_expression (('==' | '!=') relational_expression)*
- * (Left-associative)
- */
 ASTNode *parser_parse_equality_expr(Parser *parser) {
     ASTNode *left = parser_parse_relational_expr(parser);
     if (!left) return NULL;
@@ -230,10 +213,6 @@ ASTNode *parser_parse_equality_expr(Parser *parser) {
     return left;
 }
 
-/*
- * relational_expression -> additive_expression (('<' | '>' | '<=' | '>=') additive_expression)*
- * (Left-associative)
- */
 ASTNode *parser_parse_relational_expr(Parser *parser) {
     ASTNode *left = parser_parse_additive_expr(parser);
     if (!left) return NULL;
@@ -256,10 +235,6 @@ ASTNode *parser_parse_relational_expr(Parser *parser) {
     return left;
 }
 
-/*
- * additive_expression -> multiplicative_expression (('+' | '-') multiplicative_expression)*
- * (Left-associative)
- */
 ASTNode *parser_parse_additive_expr(Parser *parser) {
     ASTNode *left = parser_parse_multiplicative_expr(parser);
     if (!left) return NULL;
@@ -279,10 +254,6 @@ ASTNode *parser_parse_additive_expr(Parser *parser) {
     return left;
 }
 
-/*
- * multiplicative_expression -> unary_expression (('*' | '/' | '%') unary_expression)*
- * (Left-associative)
- */
 ASTNode *parser_parse_multiplicative_expr(Parser *parser) {
     ASTNode *left = parser_parse_unary_expr(parser);
     if (!left) return NULL;
@@ -304,13 +275,6 @@ ASTNode *parser_parse_multiplicative_expr(Parser *parser) {
     return left;
 }
 
-/*
- * unary_expression
- *  -> '++' unary_expression
- *   | '--' unary_expression
- *   | ('+' | '-' | '!' | '&') unary_expression
- *   | cast_expression
- */
 ASTNode *parser_parse_unary_expr(Parser *parser) {
     TokenType type = parser->current.type;
 
@@ -334,21 +298,15 @@ ASTNode *parser_parse_unary_expr(Parser *parser) {
     return parser_parse_cast_expr(parser);
 }
 
-/*
- * cast_expression
- *  -> '(' type ')' cast_expression
- *   | postfix_expression
- */
 ASTNode *parser_parse_cast_expr(Parser *parser) {
-    /* Check for '(' type ')' */
     if (parser->current.type == TOKEN_LEFT_PAREN && is_type_token(parser->next.type)) {
         int line = parser->current.line;
         int col = parser->current.column;
 
-        Token lp = parser_advance(parser); /* consume '(' */
+        Token lp = parser_advance(parser);
         token_free(&lp);
 
-        Token type_tok = parser_advance(parser); /* consume type */
+        Token type_tok = parser_advance(parser);
         ASTType target_type = token_to_ast_type(type_tok.type);
         token_free(&type_tok);
 
@@ -358,7 +316,7 @@ ASTNode *parser_parse_cast_expr(Parser *parser) {
             return NULL;
         }
 
-        Token rp = parser_advance(parser); /* consume ')' */
+        Token rp = parser_advance(parser);
         token_free(&rp);
 
         ASTNode *operand = parser_parse_cast_expr(parser);
@@ -370,15 +328,6 @@ ASTNode *parser_parse_cast_expr(Parser *parser) {
     return parser_parse_postfix_expr(parser);
 }
 
-/*
- * postfix_expression
- *  -> primary_expression postfix_tail*
- * postfix_tail
- *  -> '++'
- *   | '--'
- *   | '[' expression ']'
- *   | '(' argument_list_opt ')'
- */
 ASTNode *parser_parse_postfix_expr(Parser *parser) {
     ASTNode *expr = parser_parse_primary_expr(parser);
     if (!expr) return NULL;
@@ -467,15 +416,6 @@ ASTNode *parser_parse_postfix_expr(Parser *parser) {
     return expr;
 }
 
-/*
- * primary_expression
- *  -> identifier
- *   | integer_literal
- *   | float_literal
- *   | char_literal
- *   | string_literal
- *   | '(' expression ')'
- */
 ASTNode *parser_parse_primary_expr(Parser *parser) {
     Token tok = parser->current;
 
@@ -537,7 +477,6 @@ ASTNode *parser_parse_primary_expr(Parser *parser) {
             Token rp = parser_advance(parser);
             token_free(&rp);
 
-            /* Return child expression without adding unnecessary punctuation nodes */
             return inner;
         }
 
@@ -546,4 +485,614 @@ ASTNode *parser_parse_primary_expr(Parser *parser) {
                          tok.lexeme && strlen(tok.lexeme) > 0 ? tok.lexeme : token_type_name(tok.type));
             return NULL;
     }
+}
+
+/*
+ * =========================================================================
+ * Stage 5: Declarations and Statements Implementation
+ * =========================================================================
+ */
+
+static ASTNode *parse_single_init_declarator(Parser *parser, ASTType type) {
+    if (parser->current.type != TOKEN_IDENTIFIER) {
+        parser_error(parser, "expected identifier in declaration but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+
+    Token id_tok = parser_advance(parser);
+    int line = id_tok.line;
+    int col = id_tok.column;
+    const char *name = id_tok.lexeme;
+
+    if (parser->current.type == TOKEN_ASSIGN) {
+        Token eq_tok = parser_advance(parser);
+        token_free(&eq_tok);
+
+        ASTNode *init_expr = parser_parse_assignment_expr(parser);
+        if (!init_expr) {
+            token_free(&id_tok);
+            return NULL;
+        }
+        ASTNode *decl = ast_create_declaration(type, name, init_expr, 0, 0, line, col);
+        token_free(&id_tok);
+        return decl;
+    } else if (parser->current.type == TOKEN_LEFT_BRACKET) {
+        Token lb_tok = parser_advance(parser);
+        token_free(&lb_tok);
+
+        if (parser->current.type != TOKEN_INT_LITERAL) {
+            parser_error(parser, "expected integer literal for array size but found '%s'",
+                         parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+            token_free(&id_tok);
+            return NULL;
+        }
+
+        Token size_tok = parser_advance(parser);
+        int array_size = atoi(size_tok.lexeme);
+        token_free(&size_tok);
+
+        if (parser->current.type != TOKEN_RIGHT_BRACKET) {
+            parser_error(parser, "expected ']' after array size but found '%s'",
+                         parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+            token_free(&id_tok);
+            return NULL;
+        }
+
+        Token rb_tok = parser_advance(parser);
+        token_free(&rb_tok);
+
+        ASTNode *decl = ast_create_declaration(type, name, NULL, 1, array_size, line, col);
+        token_free(&id_tok);
+        return decl;
+    } else {
+        ASTNode *decl = ast_create_declaration(type, name, NULL, 0, 0, line, col);
+        token_free(&id_tok);
+        return decl;
+    }
+}
+
+/*
+ * declaration_no_semicolon -> type init_declarator (',' init_declarator)*
+ * Used in for_init. Returns single AST_DECLARATION or AST_BLOCK for multiple.
+ */
+ASTNode *parser_parse_declaration_no_semicolon(Parser *parser) {
+    if (!is_type_token(parser->current.type)) {
+        parser_error(parser, "expected type name in declaration");
+        return NULL;
+    }
+
+    Token type_tok = parser_advance(parser);
+    ASTType type = token_to_ast_type(type_tok.type);
+    token_free(&type_tok);
+
+    ASTNode *first_decl = parse_single_init_declarator(parser, type);
+    if (!first_decl) return NULL;
+
+    if (parser->current.type == TOKEN_COMMA) {
+        ASTNode *block = ast_create_block(first_decl->line, first_decl->column);
+        ast_block_add_stmt(block, first_decl);
+
+        while (parser->current.type == TOKEN_COMMA) {
+            Token comma = parser_advance(parser);
+            token_free(&comma);
+
+            ASTNode *next_decl = parse_single_init_declarator(parser, type);
+            if (!next_decl) {
+                ast_free(block);
+                return NULL;
+            }
+            ast_block_add_stmt(block, next_decl);
+        }
+        return block;
+    }
+
+    return first_decl;
+}
+
+/*
+ * declaration -> type init_declarator_list ';'
+ * init_declarator_list -> init_declarator (',' init_declarator)*
+ */
+int parser_parse_declaration_list(Parser *parser, ASTNode ***out_decls, int *out_count) {
+    if (!is_type_token(parser->current.type)) {
+        parser_error(parser, "expected type name in declaration");
+        return -1;
+    }
+
+    Token type_tok = parser_advance(parser);
+    ASTType type = token_to_ast_type(type_tok.type);
+    token_free(&type_tok);
+
+    int capacity = 4;
+    int count = 0;
+    ASTNode **decls = (ASTNode **)malloc(sizeof(ASTNode *) * capacity);
+    if (!decls) {
+        fprintf(stderr, "Fatal error: Out of memory in parser_parse_declaration_list\n");
+        exit(1);
+    }
+
+    while (1) {
+        ASTNode *decl = parse_single_init_declarator(parser, type);
+        if (!decl) {
+            for (int i = 0; i < count; i++) {
+                ast_free(decls[i]);
+            }
+            free(decls);
+            return -1;
+        }
+
+        if (count >= capacity) {
+            capacity *= 2;
+            decls = (ASTNode **)realloc(decls, sizeof(ASTNode *) * capacity);
+            if (!decls) {
+                fprintf(stderr, "Fatal error: Out of memory reallocating declaration list\n");
+                exit(1);
+            }
+        }
+        decls[count++] = decl;
+
+        if (parser->current.type == TOKEN_COMMA) {
+            Token comma = parser_advance(parser);
+            token_free(&comma);
+        } else {
+            break;
+        }
+    }
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after declaration but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        for (int i = 0; i < count; i++) {
+            ast_free(decls[i]);
+        }
+        free(decls);
+        return -1;
+    }
+
+    Token sc = parser_advance(parser);
+    token_free(&sc);
+
+    *out_decls = decls;
+    *out_count = count;
+    return 0;
+}
+
+/*
+ * block -> '{' statement_list '}'
+ * statement_list -> statement*
+ */
+ASTNode *parser_parse_block(Parser *parser) {
+    if (parser->current.type != TOKEN_LEFT_BRACE) {
+        parser_error(parser, "expected '{' to start block but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token lb = parser_advance(parser);
+    token_free(&lb);
+
+    ASTNode *block = ast_create_block(line, col);
+
+    while (parser->current.type != TOKEN_RIGHT_BRACE && parser->current.type != TOKEN_EOF) {
+        if (is_type_token(parser->current.type)) {
+            ASTNode **decls = NULL;
+            int count = 0;
+            if (parser_parse_declaration_list(parser, &decls, &count) != 0) {
+                ast_free(block);
+                return NULL;
+            }
+            for (int i = 0; i < count; i++) {
+                ast_block_add_stmt(block, decls[i]);
+            }
+            free(decls);
+        } else {
+            ASTNode *stmt = parser_parse_statement(parser);
+            if (parser->has_error) {
+                if (stmt) ast_free(stmt);
+                ast_free(block);
+                return NULL;
+            }
+            if (stmt) {
+                ast_block_add_stmt(block, stmt);
+            }
+        }
+    }
+
+    if (parser->current.type != TOKEN_RIGHT_BRACE) {
+        parser_error(parser, "expected '}' to close block but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(block);
+        return NULL;
+    }
+
+    Token rb = parser_advance(parser);
+    token_free(&rb);
+    return block;
+}
+
+/*
+ * if_statement -> 'if' '(' condition ')' statement ('else' statement)?
+ */
+ASTNode *parser_parse_if_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token if_tok = parser_advance(parser);
+    token_free(&if_tok);
+
+    if (parser->current.type != TOKEN_LEFT_PAREN) {
+        parser_error(parser, "expected '(' after 'if' but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+    Token lp = parser_advance(parser);
+    token_free(&lp);
+
+    ASTNode *cond = parser_parse_expression(parser);
+    if (!cond) return NULL;
+
+    if (parser->current.type != TOKEN_RIGHT_PAREN) {
+        parser_error(parser, "expected ')' after if condition but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(cond);
+        return NULL;
+    }
+    Token rp = parser_advance(parser);
+    token_free(&rp);
+
+    ASTNode *then_branch = parser_parse_statement(parser);
+    if (!then_branch) {
+        ast_free(cond);
+        return NULL;
+    }
+
+    ASTNode *else_branch = NULL;
+    if (parser->current.type == TOKEN_ELSE) {
+        Token else_tok = parser_advance(parser);
+        token_free(&else_tok);
+
+        else_branch = parser_parse_statement(parser);
+        if (!else_branch) {
+            ast_free(cond);
+            ast_free(then_branch);
+            return NULL;
+        }
+    }
+
+    return ast_create_if(cond, then_branch, else_branch, line, col);
+}
+
+/*
+ * while_statement -> 'while' '(' condition ')' statement
+ */
+ASTNode *parser_parse_while_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token while_tok = parser_advance(parser);
+    token_free(&while_tok);
+
+    if (parser->current.type != TOKEN_LEFT_PAREN) {
+        parser_error(parser, "expected '(' after 'while' but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+    Token lp = parser_advance(parser);
+    token_free(&lp);
+
+    ASTNode *cond = parser_parse_expression(parser);
+    if (!cond) return NULL;
+
+    if (parser->current.type != TOKEN_RIGHT_PAREN) {
+        parser_error(parser, "expected ')' after while condition but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(cond);
+        return NULL;
+    }
+    Token rp = parser_advance(parser);
+    token_free(&rp);
+
+    ASTNode *body = parser_parse_statement(parser);
+    if (!body) {
+        ast_free(cond);
+        return NULL;
+    }
+
+    return ast_create_while(cond, body, line, col);
+}
+
+/*
+ * do_while_statement -> 'do' statement 'while' '(' condition ')' ';'
+ */
+ASTNode *parser_parse_do_while_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token do_tok = parser_advance(parser);
+    token_free(&do_tok);
+
+    ASTNode *body = parser_parse_statement(parser);
+    if (!body) return NULL;
+
+    if (parser->current.type != TOKEN_WHILE) {
+        parser_error(parser, "expected 'while' after do-while body but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(body);
+        return NULL;
+    }
+    Token while_tok = parser_advance(parser);
+    token_free(&while_tok);
+
+    if (parser->current.type != TOKEN_LEFT_PAREN) {
+        parser_error(parser, "expected '(' after 'while' in do-while statement but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(body);
+        return NULL;
+    }
+    Token lp = parser_advance(parser);
+    token_free(&lp);
+
+    ASTNode *cond = parser_parse_expression(parser);
+    if (!cond) {
+        ast_free(body);
+        return NULL;
+    }
+
+    if (parser->current.type != TOKEN_RIGHT_PAREN) {
+        parser_error(parser, "expected ')' after do-while condition but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(body);
+        ast_free(cond);
+        return NULL;
+    }
+    Token rp = parser_advance(parser);
+    token_free(&rp);
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after do-while statement but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(body);
+        ast_free(cond);
+        return NULL;
+    }
+    Token sc = parser_advance(parser);
+    token_free(&sc);
+
+    return ast_create_do_while(cond, body, line, col);
+}
+
+/*
+ * for_statement -> 'for' '(' for_init ';' condition_opt ';' for_update_opt ')' statement
+ */
+ASTNode *parser_parse_for_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token for_tok = parser_advance(parser);
+    token_free(&for_tok);
+
+    if (parser->current.type != TOKEN_LEFT_PAREN) {
+        parser_error(parser, "expected '(' after 'for' but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+    Token lp = parser_advance(parser);
+    token_free(&lp);
+
+    /* for_init */
+    ASTNode *init = NULL;
+    if (is_type_token(parser->current.type)) {
+        init = parser_parse_declaration_no_semicolon(parser);
+        if (!init) return NULL;
+    } else if (parser->current.type != TOKEN_SEMICOLON) {
+        init = parser_parse_expression(parser);
+        if (!init) return NULL;
+    }
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after for-loop initialization but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        if (init) ast_free(init);
+        return NULL;
+    }
+    Token sc1 = parser_advance(parser);
+    token_free(&sc1);
+
+    /* condition_opt */
+    ASTNode *cond = NULL;
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        cond = parser_parse_expression(parser);
+        if (!cond) {
+            if (init) ast_free(init);
+            return NULL;
+        }
+    }
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after for-loop condition but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        if (init) ast_free(init);
+        if (cond) ast_free(cond);
+        return NULL;
+    }
+    Token sc2 = parser_advance(parser);
+    token_free(&sc2);
+
+    /* for_update_opt */
+    ASTNode *update = NULL;
+    if (parser->current.type != TOKEN_RIGHT_PAREN) {
+        update = parser_parse_expression(parser);
+        if (!update) {
+            if (init) ast_free(init);
+            if (cond) ast_free(cond);
+            return NULL;
+        }
+    }
+
+    if (parser->current.type != TOKEN_RIGHT_PAREN) {
+        parser_error(parser, "expected ')' after for-loop update clause but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        if (init) ast_free(init);
+        if (cond) ast_free(cond);
+        if (update) ast_free(update);
+        return NULL;
+    }
+    Token rp = parser_advance(parser);
+    token_free(&rp);
+
+    /* statement */
+    ASTNode *body = parser_parse_statement(parser);
+    if (!body) {
+        if (init) ast_free(init);
+        if (cond) ast_free(cond);
+        if (update) ast_free(update);
+        return NULL;
+    }
+
+    return ast_create_for(init, cond, update, body, line, col);
+}
+
+/*
+ * return_statement -> 'return' expression? ';'
+ */
+ASTNode *parser_parse_return_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token ret_tok = parser_advance(parser);
+    token_free(&ret_tok);
+
+    ASTNode *expr = NULL;
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        expr = parser_parse_expression(parser);
+        if (!expr) return NULL;
+    }
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after return statement but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        if (expr) ast_free(expr);
+        return NULL;
+    }
+    Token sc = parser_advance(parser);
+    token_free(&sc);
+
+    return ast_create_return(expr, line, col);
+}
+
+/*
+ * break_statement -> 'break' ';'
+ */
+ASTNode *parser_parse_break_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token brk_tok = parser_advance(parser);
+    token_free(&brk_tok);
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after break but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+    Token sc = parser_advance(parser);
+    token_free(&sc);
+
+    return ast_create_break(line, col);
+}
+
+/*
+ * continue_statement -> 'continue' ';'
+ */
+ASTNode *parser_parse_continue_stmt(Parser *parser) {
+    int line = parser->current.line;
+    int col = parser->current.column;
+    Token cont_tok = parser_advance(parser);
+    token_free(&cont_tok);
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after continue but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+    Token sc = parser_advance(parser);
+    token_free(&sc);
+
+    return ast_create_continue(line, col);
+}
+
+/*
+ * General statement dispatch
+ */
+ASTNode *parser_parse_statement(Parser *parser) {
+    TokenType type = parser->current.type;
+
+    if (type == TOKEN_SEMICOLON) {
+        Token sc = parser_advance(parser);
+        token_free(&sc);
+        return NULL;
+    }
+
+    if (type == TOKEN_LEFT_BRACE) {
+        return parser_parse_block(parser);
+    }
+
+    if (type == TOKEN_IF) {
+        return parser_parse_if_stmt(parser);
+    }
+
+    if (type == TOKEN_WHILE) {
+        return parser_parse_while_stmt(parser);
+    }
+
+    if (type == TOKEN_DO) {
+        return parser_parse_do_while_stmt(parser);
+    }
+
+    if (type == TOKEN_FOR) {
+        return parser_parse_for_stmt(parser);
+    }
+
+    if (type == TOKEN_RETURN) {
+        return parser_parse_return_stmt(parser);
+    }
+
+    if (type == TOKEN_BREAK) {
+        return parser_parse_break_stmt(parser);
+    }
+
+    if (type == TOKEN_CONTINUE) {
+        return parser_parse_continue_stmt(parser);
+    }
+
+    if (is_type_token(type)) {
+        ASTNode **decls = NULL;
+        int count = 0;
+        if (parser_parse_declaration_list(parser, &decls, &count) != 0 || count == 0) {
+            return NULL;
+        }
+        if (count == 1) {
+            ASTNode *single = decls[0];
+            free(decls);
+            return single;
+        } else {
+            ASTNode *block = ast_create_block(decls[0]->line, decls[0]->column);
+            for (int i = 0; i < count; i++) {
+                ast_block_add_stmt(block, decls[i]);
+            }
+            free(decls);
+            return block;
+        }
+    }
+
+    /* expression_statement -> expression ';' */
+    ASTNode *expr = parser_parse_expression(parser);
+    if (!expr) return NULL;
+
+    if (parser->current.type != TOKEN_SEMICOLON) {
+        parser_error(parser, "expected ';' after expression statement but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(expr);
+        return NULL;
+    }
+    Token sc = parser_advance(parser);
+    token_free(&sc);
+    return expr;
 }
