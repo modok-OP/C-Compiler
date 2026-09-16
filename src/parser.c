@@ -19,7 +19,7 @@ static void parser_error(Parser *parser, const char *fmt, ...) {
 }
 
 /*
- * Parser lifecycle
+ * Parser lifecycle with 3-token lookahead
  */
 Parser *parser_create(Lexer *lexer) {
     if (!lexer) return NULL;
@@ -35,6 +35,7 @@ Parser *parser_create(Lexer *lexer) {
     parser->error_count = 0;
     parser->current = lexer_next_token(lexer);
     parser->next = lexer_next_token(lexer);
+    parser->next2 = lexer_next_token(lexer);
 
     return parser;
 }
@@ -43,13 +44,15 @@ void parser_destroy(Parser *parser) {
     if (!parser) return;
     token_free(&parser->current);
     token_free(&parser->next);
+    token_free(&parser->next2);
     free(parser);
 }
 
 static Token parser_advance(Parser *parser) {
     Token prev = parser->current;
     parser->current = parser->next;
-    parser->next = lexer_next_token(parser->lexer);
+    parser->next = parser->next2;
+    parser->next2 = lexer_next_token(parser->lexer);
     return prev;
 }
 
@@ -130,7 +133,9 @@ static char *unescape_string_literal(const char *lexeme) {
 }
 
 /*
- * Expression parsing entry points
+ * =========================================================================
+ * Stage 4: Expression Parsing
+ * =========================================================================
  */
 ASTNode *parser_parse_expression(Parser *parser) {
     return parser_parse_assignment_expr(parser);
@@ -489,7 +494,7 @@ ASTNode *parser_parse_primary_expr(Parser *parser) {
 
 /*
  * =========================================================================
- * Stage 5: Declarations and Statements Implementation
+ * Stage 5: Declarations and Statements
  * =========================================================================
  */
 
@@ -552,10 +557,6 @@ static ASTNode *parse_single_init_declarator(Parser *parser, ASTType type) {
     }
 }
 
-/*
- * declaration_no_semicolon -> type init_declarator (',' init_declarator)*
- * Used in for_init. Returns single AST_DECLARATION or AST_BLOCK for multiple.
- */
 ASTNode *parser_parse_declaration_no_semicolon(Parser *parser) {
     if (!is_type_token(parser->current.type)) {
         parser_error(parser, "expected type name in declaration");
@@ -590,10 +591,6 @@ ASTNode *parser_parse_declaration_no_semicolon(Parser *parser) {
     return first_decl;
 }
 
-/*
- * declaration -> type init_declarator_list ';'
- * init_declarator_list -> init_declarator (',' init_declarator)*
- */
 int parser_parse_declaration_list(Parser *parser, ASTNode ***out_decls, int *out_count) {
     if (!is_type_token(parser->current.type)) {
         parser_error(parser, "expected type name in declaration");
@@ -658,10 +655,6 @@ int parser_parse_declaration_list(Parser *parser, ASTNode ***out_decls, int *out
     return 0;
 }
 
-/*
- * block -> '{' statement_list '}'
- * statement_list -> statement*
- */
 ASTNode *parser_parse_block(Parser *parser) {
     if (parser->current.type != TOKEN_LEFT_BRACE) {
         parser_error(parser, "expected '{' to start block but found '%s'",
@@ -713,9 +706,6 @@ ASTNode *parser_parse_block(Parser *parser) {
     return block;
 }
 
-/*
- * if_statement -> 'if' '(' condition ')' statement ('else' statement)?
- */
 ASTNode *parser_parse_if_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -764,9 +754,6 @@ ASTNode *parser_parse_if_stmt(Parser *parser) {
     return ast_create_if(cond, then_branch, else_branch, line, col);
 }
 
-/*
- * while_statement -> 'while' '(' condition ')' statement
- */
 ASTNode *parser_parse_while_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -802,9 +789,6 @@ ASTNode *parser_parse_while_stmt(Parser *parser) {
     return ast_create_while(cond, body, line, col);
 }
 
-/*
- * do_while_statement -> 'do' statement 'while' '(' condition ')' ';'
- */
 ASTNode *parser_parse_do_while_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -861,9 +845,6 @@ ASTNode *parser_parse_do_while_stmt(Parser *parser) {
     return ast_create_do_while(cond, body, line, col);
 }
 
-/*
- * for_statement -> 'for' '(' for_init ';' condition_opt ';' for_update_opt ')' statement
- */
 ASTNode *parser_parse_for_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -951,9 +932,6 @@ ASTNode *parser_parse_for_stmt(Parser *parser) {
     return ast_create_for(init, cond, update, body, line, col);
 }
 
-/*
- * return_statement -> 'return' expression? ';'
- */
 ASTNode *parser_parse_return_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -978,9 +956,6 @@ ASTNode *parser_parse_return_stmt(Parser *parser) {
     return ast_create_return(expr, line, col);
 }
 
-/*
- * break_statement -> 'break' ';'
- */
 ASTNode *parser_parse_break_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -998,9 +973,6 @@ ASTNode *parser_parse_break_stmt(Parser *parser) {
     return ast_create_break(line, col);
 }
 
-/*
- * continue_statement -> 'continue' ';'
- */
 ASTNode *parser_parse_continue_stmt(Parser *parser) {
     int line = parser->current.line;
     int col = parser->current.column;
@@ -1018,9 +990,6 @@ ASTNode *parser_parse_continue_stmt(Parser *parser) {
     return ast_create_continue(line, col);
 }
 
-/*
- * General statement dispatch
- */
 ASTNode *parser_parse_statement(Parser *parser) {
     TokenType type = parser->current.type;
 
@@ -1095,4 +1064,191 @@ ASTNode *parser_parse_statement(Parser *parser) {
     Token sc = parser_advance(parser);
     token_free(&sc);
     return expr;
+}
+
+/*
+ * =========================================================================
+ * Stage 6: Function Definitions and Complete Program Parsing
+ * =========================================================================
+ */
+
+/*
+ * function_definition
+ *  -> 'int' 'main' '(' ')' block
+ *   | type identifier '(' parameter_list_opt ')' block
+ */
+ASTNode *parser_parse_function_definition(Parser *parser) {
+    if (!is_type_token(parser->current.type)) {
+        parser_error(parser, "expected return type for function definition but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+
+    Token type_tok = parser_advance(parser);
+    ASTType return_type = token_to_ast_type(type_tok.type);
+    int line = type_tok.line;
+    int col = type_tok.column;
+    token_free(&type_tok);
+
+    if (parser->current.type != TOKEN_IDENTIFIER && parser->current.type != TOKEN_MAIN) {
+        parser_error(parser, "expected function name but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        return NULL;
+    }
+
+    Token name_tok = parser_advance(parser);
+    const char *func_name = name_tok.lexeme;
+
+    if (parser->current.type != TOKEN_LEFT_PAREN) {
+        parser_error(parser, "expected '(' after function name but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        token_free(&name_tok);
+        return NULL;
+    }
+    Token lp = parser_advance(parser);
+    token_free(&lp);
+
+    ASTNode *func = ast_create_function(func_name, return_type, line, col);
+    token_free(&name_tok);
+
+    /* Check for main() vs regular function */
+    if (func->data.function.name && strcmp(func->data.function.name, "main") == 0) {
+        if (parser->current.type != TOKEN_RIGHT_PAREN) {
+            parser_error(parser, "expected ')' for parameterless main function but found '%s'",
+                         parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+            ast_free(func);
+            return NULL;
+        }
+        Token rp = parser_advance(parser);
+        token_free(&rp);
+    } else {
+        /* parameter_list_opt */
+        if (parser->current.type == TOKEN_RIGHT_PAREN) {
+            Token rp = parser_advance(parser);
+            token_free(&rp);
+        } else {
+            while (1) {
+                if (!is_type_token(parser->current.type)) {
+                    parser_error(parser, "expected parameter type but found '%s'",
+                                 parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+                    ast_free(func);
+                    return NULL;
+                }
+                Token ptype_tok = parser_advance(parser);
+                ASTType ptype = token_to_ast_type(ptype_tok.type);
+                token_free(&ptype_tok);
+
+                if (parser->current.type != TOKEN_IDENTIFIER) {
+                    parser_error(parser, "expected parameter name but found '%s'",
+                                 parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+                    ast_free(func);
+                    return NULL;
+                }
+                Token pname_tok = parser_advance(parser);
+                ast_function_add_param(func, ptype, pname_tok.lexeme);
+                token_free(&pname_tok);
+
+                if (parser->current.type == TOKEN_COMMA) {
+                    Token comma = parser_advance(parser);
+                    token_free(&comma);
+                } else {
+                    break;
+                }
+            }
+
+            if (parser->current.type != TOKEN_RIGHT_PAREN) {
+                parser_error(parser, "expected ')' after parameter list but found '%s'",
+                             parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+                ast_free(func);
+                return NULL;
+            }
+            Token rp = parser_advance(parser);
+            token_free(&rp);
+        }
+    }
+
+    /* Function body: block '{' statement_list '}' */
+    if (parser->current.type != TOKEN_LEFT_BRACE) {
+        parser_error(parser, "expected '{' for function body but found '%s'",
+                     parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+        ast_free(func);
+        return NULL;
+    }
+
+    ASTNode *body = parser_parse_block(parser);
+    if (!body) {
+        ast_free(func);
+        return NULL;
+    }
+
+    ast_function_set_body(func, body);
+    return func;
+}
+
+/*
+ * program -> external_declaration*
+ * external_declaration -> function_definition | declaration
+ */
+ASTNode *parser_parse_program(Parser *parser) {
+    if (!parser) return NULL;
+
+    int line = parser->current.line;
+    int col = parser->current.column;
+    ASTNode *prog = ast_create_program(line, col);
+
+    while (parser->current.type != TOKEN_EOF) {
+        if (!is_type_token(parser->current.type)) {
+            if (parser->current.type == TOKEN_MAIN) {
+                parser_error(parser, "expected return type for 'main' function");
+            } else {
+                parser_error(parser, "expected declaration or function definition at top level but found '%s'",
+                             parser->current.lexeme ? parser->current.lexeme : token_type_name(parser->current.type));
+            }
+            ast_free(prog);
+            return NULL;
+        }
+
+        /*
+         * Disambiguate function_definition vs global declaration:
+         * parser->current is type
+         * parser->next is identifier or main
+         * parser->next2 is the token following the identifier.
+         * If parser->next2 is '(', it is a function definition!
+         * Otherwise ('=', '[', ',', ';'), it is a declaration.
+         */
+        if ((parser->next.type == TOKEN_IDENTIFIER || parser->next.type == TOKEN_MAIN) &&
+            parser->next2.type == TOKEN_LEFT_PAREN) {
+            ASTNode *func = parser_parse_function_definition(parser);
+            if (!func || parser->has_error) {
+                if (func) ast_free(func);
+                ast_free(prog);
+                return NULL;
+            }
+            ast_program_add_decl(prog, func);
+        } else {
+            ASTNode **decls = NULL;
+            int count = 0;
+            if (parser_parse_declaration_list(parser, &decls, &count) != 0 || parser->has_error) {
+                ast_free(prog);
+                return NULL;
+            }
+            for (int i = 0; i < count; i++) {
+                ast_program_add_decl(prog, decls[i]);
+            }
+            free(decls);
+        }
+    }
+
+    if (parser->current.type != TOKEN_EOF) {
+        parser_error(parser, "unexpected extra tokens after program completion");
+        ast_free(prog);
+        return NULL;
+    }
+
+    if (parser->has_error) {
+        ast_free(prog);
+        return NULL;
+    }
+
+    return prog;
 }

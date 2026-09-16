@@ -5,13 +5,14 @@
 #include "ast.h"
 
 /*
- * Parser structure holding lexer instance, 2-token lookahead,
+ * Parser structure holding lexer instance, 3-token lookahead (current, next, next2),
  * and error tracking state.
  */
 typedef struct {
     Lexer *lexer;
     Token current;
     Token next;
+    Token next2;
     int has_error;
     int error_count;
 } Parser;
@@ -23,7 +24,13 @@ Parser *parser_create(Lexer *lexer);
 void parser_destroy(Parser *parser);
 
 /*
- * Expression parsing entry points
+ * Top-level program and function parsing entry points (Stage 6)
+ */
+ASTNode *parser_parse_program(Parser *parser);
+ASTNode *parser_parse_function_definition(Parser *parser);
+
+/*
+ * Expression parsing entry points (Stage 4)
  */
 ASTNode *parser_parse_expression(Parser *parser);
 ASTNode *parser_parse_assignment_expr(Parser *parser);
