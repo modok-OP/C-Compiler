@@ -8,6 +8,7 @@ INCDIR = include
 BUILDDIR = build
 TARGET = compiler.exe
 TEST_AST = $(BUILDDIR)/test_ast.exe
+TEST_EXPR = $(BUILDDIR)/test_expressions.exe
 
 # Sources, Headers, and Objects
 SRCS = $(wildcard $(SRCDIR)/*.c)
@@ -34,6 +35,14 @@ $(TEST_AST): tests/parser/test_ast.c $(BUILDDIR)/ast.o $(BUILDDIR)/token.o
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+# Build and run Expression Parser test
+test_expressions: $(TEST_EXPR)
+	$(TEST_EXPR)
+
+$(TEST_EXPR): tests/parser/test_expressions.c $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
 # Clean target
 clean:
 	-cmd /c "if exist $(BUILDDIR)\*.o del /q /f $(BUILDDIR)\*.o"
@@ -41,4 +50,4 @@ clean:
 	-cmd /c "if exist $(TARGET) del /q /f $(TARGET)"
 	@echo Clean complete.
 
-.PHONY: all clean test_ast
+.PHONY: all clean test_ast test_expressions
