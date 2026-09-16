@@ -1,6 +1,14 @@
-# C Compiler Front-End (Frozen Specification v1.0)
+# C Compiler Front-End 
 
-A robust, production-quality compiler front end for a defined subset of the C programming language, implemented in C99 according to the frozen **C Compiler Front-End Language & Semantic Specification Version 1.0**.
+A modular compiler front-end for a deliberately defined subset of the C programming language.
+
+The project implements the complete front-end pipeline:
+
+**Lexical Analysis → Parsing → AST → Symbol Table & Scope Analysis → Type Checking → Semantic Analysis**
+
+The compiler validates `.c` source files and reports lexical, syntax, and semantic errors according to a **project-defined language specification**.
+
+> **Project scope:** This repository implements a defined subset of C. It is a compiler front-end only and does not include intermediate representation, optimization, or backend code generation.
 
 ---
 
@@ -9,9 +17,17 @@ A robust, production-quality compiler front end for a defined subset of the C pr
 The purpose of this project is to implement a complete front-end compiler pipeline that takes a `.c` source file, performs lexical analysis, parses it into an Abstract Syntax Tree (AST), constructs a scoped symbol table, and enforces comprehensive semantic type checking, control flow analysis, and I/O format verification.
 
 > [!NOTE]
-> **Accurate Status Description**:
-> **Compiler front-end for the frozen C subset defined in Language & Semantic Specification v1.0.**
-> The current front end ends after semantic validation. It does not include intermediate code generation (IR), optimization, or backend machine code emission.
+> **Implementation Scope**
+>
+> This project implements a defined subset of the C language based on the
+> **C Compiler Front-End Language & Semantic Specification v1.0**.
+> The supported language features, grammar, typing, scope rules, and semantic
+> validation requirements follow the specification provided in the project
+> documentation.
+>
+>
+> **Language Specification:** [C Compiler Front-End Language & Semantic Specification v1.0](./C_Compiler_Front_End_Language_Specification_v1.0.pdf)
+
 
 ---
 
