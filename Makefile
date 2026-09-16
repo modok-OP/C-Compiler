@@ -11,6 +11,8 @@ TEST_AST = $(BUILDDIR)/test_ast.exe
 TEST_EXPR = $(BUILDDIR)/test_expressions.exe
 TEST_STMT = $(BUILDDIR)/test_statements.exe
 TEST_PROG = $(BUILDDIR)/test_program.exe
+TEST_SYM = $(BUILDDIR)/test_symbol_table.exe
+TEST_SCOPE = $(BUILDDIR)/test_scope_analysis.exe
 
 # Sources, Headers, and Objects
 SRCS = $(wildcard $(SRCDIR)/*.c)
@@ -61,6 +63,22 @@ $(TEST_PROG): tests/parser/test_program.c $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+# Build and run Symbol Table test
+test_symbol_table: $(TEST_SYM)
+	$(TEST_SYM)
+
+$(TEST_SYM): tests/semantic/test_symbol_table.c $(BUILDDIR)/symbol_table.o $(BUILDDIR)/ast.o $(BUILDDIR)/token.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
+# Build and run Scope Analysis test
+test_scope_analysis: $(TEST_SCOPE)
+	$(TEST_SCOPE)
+
+$(TEST_SCOPE): tests/semantic/test_scope_analysis.c $(BUILDDIR)/semantic.o $(BUILDDIR)/symbol_table.o $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
 # Clean target
 clean:
 	-cmd /c "if exist $(BUILDDIR)\*.o del /q /f $(BUILDDIR)\*.o"
@@ -68,4 +86,4 @@ clean:
 	-cmd /c "if exist $(TARGET) del /q /f $(TARGET)"
 	@echo Clean complete.
 
-.PHONY: all clean test_ast test_expressions test_statements test_program
+.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis
