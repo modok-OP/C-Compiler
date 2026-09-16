@@ -15,6 +15,7 @@ typedef enum {
     SEM_TYPE_INT,
     SEM_TYPE_FLOAT,
     SEM_TYPE_CHAR,
+    SEM_TYPE_STRING,   /* Internal semantic type for string literals */
     SEM_TYPE_BOOL,     /* Internal semantic type for conditions and logical operations */
     SEM_TYPE_ERROR     /* Error propagation sentinel */
 } SemType;

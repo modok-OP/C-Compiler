@@ -25,13 +25,14 @@ ASTType sem_type_to_ast_type(SemType sem_type) {
 
 const char *sem_type_name(SemType type) {
     switch (type) {
-        case SEM_TYPE_VOID:  return "void";
-        case SEM_TYPE_INT:   return "int";
-        case SEM_TYPE_FLOAT: return "float";
-        case SEM_TYPE_CHAR:  return "char";
-        case SEM_TYPE_BOOL:  return "bool (internal)";
-        case SEM_TYPE_ERROR: return "error";
-        default:             return "unknown";
+        case SEM_TYPE_VOID:   return "void";
+        case SEM_TYPE_INT:    return "int";
+        case SEM_TYPE_FLOAT:  return "float";
+        case SEM_TYPE_CHAR:   return "char";
+        case SEM_TYPE_STRING: return "string";
+        case SEM_TYPE_BOOL:   return "bool (internal)";
+        case SEM_TYPE_ERROR:  return "error";
+        default:              return "unknown";
     }
 }
 
@@ -48,9 +49,10 @@ int type_is_same(SemType a, SemType b) {
  * Only int -> float widening conversion is allowed across different value types.
  */
 int type_can_implicitly_convert(SemType src, SemType dest) {
-    if (src == SEM_TYPE_ERROR || dest == SEM_TYPE_ERROR ||
-        src == SEM_TYPE_VOID  || dest == SEM_TYPE_VOID  ||
-        src == SEM_TYPE_BOOL  || dest == SEM_TYPE_BOOL) {
+    if (src == SEM_TYPE_ERROR  || dest == SEM_TYPE_ERROR  ||
+        src == SEM_TYPE_VOID   || dest == SEM_TYPE_VOID   ||
+        src == SEM_TYPE_STRING || dest == SEM_TYPE_STRING ||
+        src == SEM_TYPE_BOOL   || dest == SEM_TYPE_BOOL) {
         return 0;
     }
 

@@ -14,6 +14,8 @@ TEST_PROG = $(BUILDDIR)/test_program.exe
 TEST_SYM = $(BUILDDIR)/test_symbol_table.exe
 TEST_SCOPE = $(BUILDDIR)/test_scope_analysis.exe
 TEST_TYPE = $(BUILDDIR)/test_type_system.exe
+TEST_SEM = $(BUILDDIR)/test_semantic_analyzer.exe
+TEST_FULL = $(BUILDDIR)/test_full_semantic.exe
 
 # Sources, Headers, and Objects
 SRCS = $(wildcard $(SRCDIR)/*.c)
@@ -88,6 +90,22 @@ $(TEST_TYPE): tests/semantic/test_type_system.c $(BUILDDIR)/type_system.o $(BUIL
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+# Build and run Semantic Analyzer test
+test_semantic_analyzer: $(TEST_SEM)
+	$(TEST_SEM)
+
+$(TEST_SEM): tests/semantic/test_semantic_analyzer.c $(BUILDDIR)/semantic.o $(BUILDDIR)/symbol_table.o $(BUILDDIR)/type_system.o $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
+# Build and run Full Semantic Integration test
+test_full_semantic: $(TEST_FULL)
+	$(TEST_FULL)
+
+$(TEST_FULL): tests/semantic/test_full_semantic.c $(BUILDDIR)/semantic.o $(BUILDDIR)/symbol_table.o $(BUILDDIR)/type_system.o $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
 # Clean target
 clean:
 	-cmd /c "if exist $(BUILDDIR)\*.o del /q /f $(BUILDDIR)\*.o"
@@ -95,4 +113,4 @@ clean:
 	-cmd /c "if exist $(TARGET) del /q /f $(TARGET)"
 	@echo Clean complete.
 
-.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis test_type_system
+.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis test_type_system test_semantic_analyzer test_full_semantic

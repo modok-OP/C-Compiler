@@ -5,16 +5,33 @@
 #include <stdarg.h>
 
 /*
- * Diagnostic error reporting helper
+ * Semantic diagnostic reporter
  */
-static void semantic_error(SemanticContext *ctx, int line, int col, const char *fmt, ...) {
+static void semantic_error(SemanticContext *ctx, int line, int col, const char *code, const char *fmt, ...) {
     ctx->error_count++;
     va_list args;
     va_start(args, fmt);
-    fprintf(stderr, "Semantic Error [%d:%d]: ", line, col);
+    fprintf(stderr, "Semantic Error [%d:%d]: %s: ", line, col, code);
     vfprintf(stderr, fmt, args);
     fprintf(stderr, "\n");
     va_end(args);
+}
+
+/*
+ * Checks if an identifier was ever declared in any scope in the entire scope tree.
+ * Used to distinguish SEM-03 (out of scope) from SEM-01 (never declared).
+ */
+static int symbol_exists_in_any_scope(const Scope *scope, const char *name) {
+    if (!scope || !name) return 0;
+    if (scope_lookup_current(scope, name) != NULL) {
+        return 1;
+    }
+    for (int i = 0; i < scope->child_count; i++) {
+        if (symbol_exists_in_any_scope(scope->children[i], name)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 SemanticContext *semantic_context_create(void) {
@@ -26,6 +43,10 @@ SemanticContext *semantic_context_create(void) {
     ctx->global_scope = scope_create(SCOPE_GLOBAL, NULL, "global", 0);
     scope_init_predefined_functions(ctx->global_scope);
     ctx->current_scope = ctx->global_scope;
+    ctx->current_function = NULL;
+    ctx->loop_depth = 0;
+    ctx->function_has_return = 0;
+    ctx->main_count = 0;
     ctx->error_count = 0;
     ctx->warning_count = 0;
     return ctx;
@@ -39,18 +60,304 @@ void semantic_context_destroy(SemanticContext *ctx) {
     free(ctx);
 }
 
+/* Forward declarations */
+static void validate_statement(SemanticContext *ctx, const ASTNode *stmt);
+
 /*
- * Traverses statement nodes within a scope, managing nested block scopes.
+ * Expression Type Inference Visitor
  */
-static void traverse_statement(SemanticContext *ctx, const ASTNode *stmt) {
+SemType semantic_check_expression(SemanticContext *ctx, const ASTNode *expr) {
+    if (!expr) return SEM_TYPE_ERROR;
+
+    switch (expr->kind) {
+        case AST_LITERAL: {
+            switch (expr->data.literal.literal_type) {
+                case LITERAL_INT:    return SEM_TYPE_INT;
+                case LITERAL_FLOAT:  return SEM_TYPE_FLOAT;
+                case LITERAL_CHAR:   return SEM_TYPE_CHAR;
+                case LITERAL_STRING: return SEM_TYPE_STRING;
+                default:             return SEM_TYPE_ERROR;
+            }
+        }
+
+        case AST_IDENTIFIER: {
+            const char *name = expr->data.identifier.name;
+            Symbol *sym = scope_lookup(ctx->current_scope, name);
+            if (!sym) {
+                if (symbol_exists_in_any_scope(ctx->global_scope, name)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-03",
+                                   "Identifier '%s' is out of scope", name);
+                } else {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-01",
+                                   "Identifier '%s' is not declared", name);
+                }
+                return SEM_TYPE_ERROR;
+            }
+
+            if (sym->kind == SYMBOL_FUNCTION || sym->kind == SYMBOL_PREDEFINED_FUNCTION) {
+                semantic_error(ctx, expr->line, expr->column, "SEM-01",
+                               "Function '%s' cannot be used as an expression value", name);
+                return SEM_TYPE_ERROR;
+            }
+
+            return sem_type_from_ast_type(sym->type);
+        }
+
+        case AST_ARRAY_ACCESS: {
+            const ASTNode *arr = expr->data.array_access.array_expr;
+            Symbol *sym = NULL;
+            if (arr && arr->kind == AST_IDENTIFIER) {
+                const char *arr_name = arr->data.identifier.name;
+                sym = scope_lookup(ctx->current_scope, arr_name);
+                if (!sym) {
+                    if (symbol_exists_in_any_scope(ctx->global_scope, arr_name)) {
+                        semantic_error(ctx, arr->line, arr->column, "SEM-03",
+                                       "Identifier '%s' is out of scope", arr_name);
+                    } else {
+                        semantic_error(ctx, arr->line, arr->column, "SEM-01",
+                                       "Identifier '%s' is not declared", arr_name);
+                    }
+                } else if (sym->kind != SYMBOL_ARRAY && !sym->is_array) {
+                    semantic_error(ctx, arr->line, arr->column, "SEM-15",
+                                   "Identifier '%s' is not an array", arr_name);
+                }
+            } else {
+                semantic_error(ctx, expr->line, expr->column, "SEM-15",
+                               "Invalid array access expression");
+            }
+
+            SemType idx_type = semantic_check_expression(ctx, expr->data.array_access.index_expr);
+            if (idx_type != SEM_TYPE_ERROR && !type_is_valid_array_index(idx_type)) {
+                semantic_error(ctx, expr->line, expr->column, "SEM-15",
+                               "Array index must be int");
+            }
+
+            if (sym) {
+                return sem_type_from_ast_type(sym->type);
+            }
+            return SEM_TYPE_ERROR;
+        }
+
+        case AST_BINARY_EXPR: {
+            TokenType op = expr->data.binary_expr.op;
+            SemType left = semantic_check_expression(ctx, expr->data.binary_expr.left);
+            SemType right = semantic_check_expression(ctx, expr->data.binary_expr.right);
+
+            if (left == SEM_TYPE_ERROR || right == SEM_TYPE_ERROR) {
+                return SEM_TYPE_ERROR;
+            }
+
+            if (op == TOKEN_MODULO) {
+                if (!type_is_valid_modulus(left, right)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-06",
+                                   "Modulus requires int operands");
+                    return SEM_TYPE_ERROR;
+                }
+                return SEM_TYPE_INT;
+            }
+
+            if (op == TOKEN_PLUS || op == TOKEN_MINUS || op == TOKEN_MULTIPLY || op == TOKEN_DIVIDE) {
+                SemType res = type_arithmetic_result(op, left, right);
+                if (res == SEM_TYPE_ERROR) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-05",
+                                   "Invalid operand types for arithmetic");
+                    return SEM_TYPE_ERROR;
+                }
+                return res;
+            }
+
+            if (op == TOKEN_LESS || op == TOKEN_LESS_EQUAL ||
+                op == TOKEN_GREATER || op == TOKEN_GREATER_EQUAL ||
+                op == TOKEN_EQUAL || op == TOKEN_NOT_EQUAL) {
+                if (!type_is_valid_comparison(left, right)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-05",
+                                   "Invalid operand types for comparison");
+                    return SEM_TYPE_ERROR;
+                }
+                return SEM_TYPE_BOOL;
+            }
+
+            if (op == TOKEN_LOGICAL_AND || op == TOKEN_LOGICAL_OR) {
+                if (!type_is_valid_logical_operand(left) || !type_is_valid_logical_operand(right)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-08",
+                                   "Logical operator requires boolean operands");
+                    return SEM_TYPE_ERROR;
+                }
+                return SEM_TYPE_BOOL;
+            }
+
+            return SEM_TYPE_ERROR;
+        }
+
+        case AST_UNARY_EXPR: {
+            TokenType op = expr->data.unary_expr.op;
+            const ASTNode *operand = expr->data.unary_expr.operand;
+
+            if (op == TOKEN_LOGICAL_NOT) {
+                SemType t = semantic_check_expression(ctx, operand);
+                if (t != SEM_TYPE_ERROR && !type_is_valid_logical_operand(t)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-08",
+                                   "Logical operator requires boolean operands");
+                    return SEM_TYPE_ERROR;
+                }
+                return SEM_TYPE_BOOL;
+            }
+
+            if (op == TOKEN_PLUS || op == TOKEN_MINUS) {
+                SemType t = semantic_check_expression(ctx, operand);
+                if (t != SEM_TYPE_INT && t != SEM_TYPE_FLOAT) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-05",
+                                   "Invalid operand types for arithmetic");
+                    return SEM_TYPE_ERROR;
+                }
+                return t;
+            }
+
+            if (op == TOKEN_INCREMENT || op == TOKEN_DECREMENT) {
+                if (operand->kind != AST_IDENTIFIER && operand->kind != AST_ARRAY_ACCESS) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-05",
+                                   "Increment/decrement operand must be an lvalue");
+                    return SEM_TYPE_ERROR;
+                }
+                SemType t = semantic_check_expression(ctx, operand);
+                if (t != SEM_TYPE_ERROR && !type_is_valid_increment_type(t)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-05",
+                                   "Increment/decrement requires modifiable int or float operand");
+                    return SEM_TYPE_ERROR;
+                }
+                return t;
+            }
+
+            if (op == TOKEN_AMPERSAND) {
+                /* & is valid for scanf destination, check operand */
+                return semantic_check_expression(ctx, operand);
+            }
+
+            return SEM_TYPE_ERROR;
+        }
+
+        case AST_ASSIGNMENT: {
+            const ASTNode *left = expr->data.assignment.left;
+            const ASTNode *right = expr->data.assignment.right;
+            TokenType op = expr->data.assignment.op;
+
+            if (left->kind != AST_IDENTIFIER && left->kind != AST_ARRAY_ACCESS) {
+                semantic_error(ctx, expr->line, expr->column, "SEM-04",
+                               "Left-hand side of assignment must be an lvalue");
+                return SEM_TYPE_ERROR;
+            }
+
+            SemType ltype = semantic_check_expression(ctx, left);
+            SemType rtype = semantic_check_expression(ctx, right);
+
+            if (ltype == SEM_TYPE_ERROR || rtype == SEM_TYPE_ERROR) {
+                return SEM_TYPE_ERROR;
+            }
+
+            if (op == TOKEN_ASSIGN) {
+                if (!type_is_valid_assignment(ltype, rtype)) {
+                    if (left->kind == AST_ARRAY_ACCESS) {
+                        semantic_error(ctx, expr->line, expr->column, "SEM-16",
+                                       "Element assignment incompatible with %s", sem_type_name(ltype));
+                    } else {
+                        semantic_error(ctx, expr->line, expr->column, "SEM-04",
+                                       "Cannot assign %s to %s", sem_type_name(rtype), sem_type_name(ltype));
+                    }
+                    return SEM_TYPE_ERROR;
+                }
+            } else {
+                if (!type_is_valid_compound_assignment(op, ltype, rtype)) {
+                    if (left->kind == AST_ARRAY_ACCESS) {
+                        semantic_error(ctx, expr->line, expr->column, "SEM-16",
+                                       "Element assignment incompatible with %s", sem_type_name(ltype));
+                    } else {
+                        semantic_error(ctx, expr->line, expr->column, "SEM-04",
+                                       "Compound assignment incompatible with %s", sem_type_name(ltype));
+                    }
+                    return SEM_TYPE_ERROR;
+                }
+            }
+            return ltype;
+        }
+
+        case AST_CALL: {
+            const char *callee = expr->data.call.callee;
+            Symbol *func_sym = scope_lookup(ctx->current_scope, callee);
+            if (!func_sym) {
+                if (symbol_exists_in_any_scope(ctx->global_scope, callee)) {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-03",
+                                   "Identifier '%s' is out of scope", callee);
+                } else {
+                    semantic_error(ctx, expr->line, expr->column, "SEM-01",
+                                   "Identifier '%s' is not declared", callee);
+                }
+                return SEM_TYPE_ERROR;
+            }
+
+            if (func_sym->kind != SYMBOL_FUNCTION && func_sym->kind != SYMBOL_PREDEFINED_FUNCTION) {
+                semantic_error(ctx, expr->line, expr->column, "SEM-01",
+                               "Identifier '%s' is not a function", callee);
+                return SEM_TYPE_ERROR;
+            }
+
+            /* Predefined function (printf, scanf) */
+            if (func_sym->kind == SYMBOL_PREDEFINED_FUNCTION) {
+                for (int i = 0; i < expr->data.call.arg_count; i++) {
+                    semantic_check_expression(ctx, expr->data.call.args[i]);
+                }
+                return sem_type_from_ast_type(func_sym->return_type);
+            }
+
+            /* User function: validate arity */
+            if (expr->data.call.arg_count != func_sym->param_count) {
+                semantic_error(ctx, expr->line, expr->column, "SEM-09",
+                               "Wrong number of arguments (expected %d, got %d)",
+                               func_sym->param_count, expr->data.call.arg_count);
+                return sem_type_from_ast_type(func_sym->return_type);
+            }
+
+            /* Validate argument types */
+            for (int i = 0; i < expr->data.call.arg_count; i++) {
+                SemType arg_t = semantic_check_expression(ctx, expr->data.call.args[i]);
+                SemType param_t = sem_type_from_ast_type(func_sym->params[i].type);
+                if (arg_t != SEM_TYPE_ERROR && !type_can_implicitly_convert(arg_t, param_t)) {
+                    semantic_error(ctx, expr->data.call.args[i]->line, expr->data.call.args[i]->column, "SEM-10",
+                                   "Argument type mismatch for parameter '%s' (expected %s, got %s)",
+                                   func_sym->params[i].name, sem_type_name(param_t), sem_type_name(arg_t));
+                }
+            }
+
+            return sem_type_from_ast_type(func_sym->return_type);
+        }
+
+        case AST_CAST: {
+            SemType target_t = sem_type_from_ast_type(expr->data.cast.target_type);
+            SemType src_t = semantic_check_expression(ctx, expr->data.cast.operand);
+            if (src_t != SEM_TYPE_ERROR && !type_can_explicit_cast(src_t, target_t)) {
+                semantic_error(ctx, expr->line, expr->column, "SEM-19",
+                               "Cast type combination is not supported");
+                return SEM_TYPE_ERROR;
+            }
+            return target_t;
+        }
+
+        default:
+            return SEM_TYPE_ERROR;
+    }
+}
+
+/*
+ * Statement Validation Visitor
+ */
+static void validate_statement(SemanticContext *ctx, const ASTNode *stmt) {
     if (!stmt) return;
 
     switch (stmt->kind) {
         case AST_DECLARATION: {
             const char *name = stmt->data.declaration.name;
             if (scope_lookup_current(ctx->current_scope, name) != NULL) {
-                semantic_error(ctx, stmt->line, stmt->column,
-                               "SEM-02: Duplicate declaration of '%s'", name);
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-02",
+                               "Duplicate declaration of '%s'", name);
             } else {
                 Symbol *sym = NULL;
                 if (stmt->data.declaration.is_array) {
@@ -65,91 +372,177 @@ static void traverse_statement(SemanticContext *ctx, const ASTNode *stmt) {
                 }
                 scope_insert(ctx->current_scope, sym);
             }
+
+            if (stmt->data.declaration.initializer) {
+                SemType decl_t = sem_type_from_ast_type(stmt->data.declaration.type);
+                SemType init_t = semantic_check_expression(ctx, stmt->data.declaration.initializer);
+                if (init_t != SEM_TYPE_ERROR && !type_is_valid_assignment(decl_t, init_t)) {
+                    semantic_error(ctx, stmt->line, stmt->column, "SEM-04",
+                                   "Cannot assign %s to %s", sem_type_name(init_t), sem_type_name(decl_t));
+                }
+            }
             break;
         }
 
         case AST_BLOCK: {
-            /* Nested block introduces a new block scope */
             ctx->current_scope = scope_enter(ctx->current_scope, SCOPE_BLOCK, "block");
             for (int i = 0; i < stmt->data.block.stmt_count; i++) {
-                traverse_statement(ctx, stmt->data.block.statements[i]);
+                validate_statement(ctx, stmt->data.block.statements[i]);
             }
             ctx->current_scope = scope_exit(ctx->current_scope);
             break;
         }
 
-        case AST_IF:
-            traverse_statement(ctx, stmt->data.if_stmt.then_branch);
+        case AST_IF: {
+            SemType cond_t = semantic_check_expression(ctx, stmt->data.if_stmt.condition);
+            if (cond_t != SEM_TYPE_ERROR && cond_t != SEM_TYPE_BOOL) {
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-07",
+                               "Condition must produce boolean result");
+            }
+            validate_statement(ctx, stmt->data.if_stmt.then_branch);
             if (stmt->data.if_stmt.else_branch) {
-                traverse_statement(ctx, stmt->data.if_stmt.else_branch);
+                validate_statement(ctx, stmt->data.if_stmt.else_branch);
             }
             break;
+        }
 
-        case AST_WHILE:
-        case AST_DO_WHILE:
-            traverse_statement(ctx, stmt->data.while_stmt.body);
+        case AST_WHILE: {
+            ctx->loop_depth++;
+            SemType cond_t = semantic_check_expression(ctx, stmt->data.while_stmt.condition);
+            if (cond_t != SEM_TYPE_ERROR && cond_t != SEM_TYPE_BOOL) {
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-07",
+                               "Condition must produce boolean result");
+            }
+            validate_statement(ctx, stmt->data.while_stmt.body);
+            ctx->loop_depth--;
             break;
+        }
 
-        case AST_FOR:
-            /* If for-init declares a loop variable, enter iteration scope */
+        case AST_DO_WHILE: {
+            ctx->loop_depth++;
+            validate_statement(ctx, stmt->data.while_stmt.body);
+            SemType cond_t = semantic_check_expression(ctx, stmt->data.while_stmt.condition);
+            if (cond_t != SEM_TYPE_ERROR && cond_t != SEM_TYPE_BOOL) {
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-07",
+                               "Condition must produce boolean result");
+            }
+            ctx->loop_depth--;
+            break;
+        }
+
+        case AST_FOR: {
+            ctx->loop_depth++;
             if (stmt->data.for_stmt.init && stmt->data.for_stmt.init->kind == AST_DECLARATION) {
                 ctx->current_scope = scope_enter(ctx->current_scope, SCOPE_BLOCK, "for");
-                traverse_statement(ctx, stmt->data.for_stmt.init);
-                traverse_statement(ctx, stmt->data.for_stmt.body);
+                validate_statement(ctx, stmt->data.for_stmt.init);
+            } else if (stmt->data.for_stmt.init) {
+                semantic_check_expression(ctx, stmt->data.for_stmt.init);
+            }
+
+            if (stmt->data.for_stmt.condition) {
+                SemType cond_t = semantic_check_expression(ctx, stmt->data.for_stmt.condition);
+                if (cond_t != SEM_TYPE_ERROR && cond_t != SEM_TYPE_BOOL) {
+                    semantic_error(ctx, stmt->line, stmt->column, "SEM-07",
+                                   "Condition must produce boolean result");
+                }
+            }
+
+            if (stmt->data.for_stmt.update) {
+                semantic_check_expression(ctx, stmt->data.for_stmt.update);
+            }
+
+            validate_statement(ctx, stmt->data.for_stmt.body);
+
+            if (stmt->data.for_stmt.init && stmt->data.for_stmt.init->kind == AST_DECLARATION) {
                 ctx->current_scope = scope_exit(ctx->current_scope);
+            }
+            ctx->loop_depth--;
+            break;
+        }
+
+        case AST_RETURN: {
+            if (!ctx->current_function) {
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-11",
+                               "Return statement outside function");
+                return;
+            }
+
+            SemType expected_t = sem_type_from_ast_type(ctx->current_function->return_type);
+            if (expected_t == SEM_TYPE_VOID) {
+                if (stmt->data.return_stmt.expression != NULL) {
+                    semantic_error(ctx, stmt->line, stmt->column, "SEM-11",
+                                   "Return expression incompatible with function type");
+                }
             } else {
-                traverse_statement(ctx, stmt->data.for_stmt.body);
+                if (stmt->data.return_stmt.expression == NULL) {
+                    semantic_error(ctx, stmt->line, stmt->column, "SEM-11",
+                                   "Return expression incompatible with function type");
+                } else {
+                    SemType actual_t = semantic_check_expression(ctx, stmt->data.return_stmt.expression);
+                    if (actual_t != SEM_TYPE_ERROR && !type_is_valid_return(expected_t, actual_t)) {
+                        semantic_error(ctx, stmt->line, stmt->column, "SEM-11",
+                                       "Return expression incompatible with function type");
+                    } else if (actual_t != SEM_TYPE_ERROR) {
+                        ctx->function_has_return = 1;
+                    }
+                }
             }
             break;
+        }
+
+        case AST_BREAK: {
+            if (ctx->loop_depth <= 0) {
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-13",
+                               "break is only valid inside a loop");
+            }
+            break;
+        }
+
+        case AST_CONTINUE: {
+            if (ctx->loop_depth <= 0) {
+                semantic_error(ctx, stmt->line, stmt->column, "SEM-14",
+                               "continue is only valid inside a loop");
+            }
+            break;
+        }
 
         default:
-            /* Non-declaration statements (expressions, return, break, continue) do not affect scopes */
+            /* Expression statements (call, assignment, etc.) */
+            semantic_check_expression(ctx, stmt);
             break;
     }
 }
 
 /*
- * Traverses top-level external declarations (global variables, arrays, and functions).
+ * Scope building pass (Stage 7 backward-compatible helper)
  */
 int semantic_build_symbols(SemanticContext *ctx, const ASTNode *program) {
+    return semantic_analyze(ctx, program);
+}
+
+/*
+ * Full Semantic Analysis entry point (Stage 9)
+ */
+int semantic_analyze(SemanticContext *ctx, const ASTNode *program) {
     if (!ctx || !program || program->kind != AST_PROGRAM) {
         return -1;
     }
 
     ctx->current_scope = ctx->global_scope;
+    ctx->main_count = 0;
 
     for (int i = 0; i < program->data.program.decl_count; i++) {
         const ASTNode *decl = program->data.program.declarations[i];
         if (!decl) continue;
 
         if (decl->kind == AST_DECLARATION) {
-            /* Global variable or 1-D array */
-            const char *name = decl->data.declaration.name;
-            if (scope_lookup_current(ctx->global_scope, name) != NULL) {
-                semantic_error(ctx, decl->line, decl->column,
-                               "SEM-02: Duplicate declaration of '%s'", name);
-            } else {
-                Symbol *sym = NULL;
-                if (decl->data.declaration.is_array) {
-                    sym = symbol_create_array(name,
-                                              decl->data.declaration.type,
-                                              decl->data.declaration.array_size,
-                                              decl->line, decl->column);
-                } else {
-                    sym = symbol_create_variable(name,
-                                                 decl->data.declaration.type,
-                                                 decl->line, decl->column);
-                }
-                scope_insert(ctx->global_scope, sym);
-            }
+            validate_statement(ctx, decl);
         } else if (decl->kind == AST_FUNCTION) {
-            /* Function definition */
             const char *func_name = decl->data.function.name;
 
-            /* Check duplicate function name in global namespace */
             if (scope_lookup_current(ctx->global_scope, func_name) != NULL) {
-                semantic_error(ctx, decl->line, decl->column,
-                               "SEM-02: Duplicate declaration of '%s'", func_name);
+                semantic_error(ctx, decl->line, decl->column, "SEM-02",
+                               "Duplicate declaration of '%s'", func_name);
             } else {
                 Symbol *func_sym = symbol_create_function(func_name,
                                                           decl->data.function.return_type,
@@ -162,35 +555,56 @@ int semantic_build_symbols(SemanticContext *ctx, const ASTNode *program) {
                 scope_insert(ctx->global_scope, func_sym);
             }
 
+            /* Entry point check for main() */
+            if (strcmp(func_name, "main") == 0) {
+                ctx->main_count++;
+                if (decl->data.function.return_type != TYPE_INT || decl->data.function.param_count != 0) {
+                    semantic_error(ctx, decl->line, decl->column, "SEM-20",
+                                   "Entry point must be int main()");
+                }
+            }
+
             /* Enter function scope */
             ctx->current_scope = scope_enter(ctx->current_scope, SCOPE_FUNCTION, func_name);
+            ctx->current_function = scope_lookup_current(ctx->global_scope, func_name);
+            ctx->function_has_return = 0;
 
-            /* Insert parameters into function scope */
+            /* Insert parameters */
             for (int p = 0; p < decl->data.function.param_count; p++) {
                 const char *pname = decl->data.function.params[p].name;
                 ASTType ptype = decl->data.function.params[p].type;
                 if (scope_lookup_current(ctx->current_scope, pname) != NULL) {
-                    semantic_error(ctx, decl->line, decl->column,
-                                   "SEM-02: Duplicate declaration of '%s'", pname);
+                    semantic_error(ctx, decl->line, decl->column, "SEM-02",
+                                   "Duplicate declaration of '%s'", pname);
                 } else {
                     Symbol *psym = symbol_create_parameter(pname, ptype, decl->line, decl->column);
                     scope_insert(ctx->current_scope, psym);
                 }
             }
 
-            /*
-             * Traverse top-level body statements directly within function scope
-             */
+            /* Traverse function body statements */
             if (decl->data.function.body && decl->data.function.body->kind == AST_BLOCK) {
                 const ASTNode *body = decl->data.function.body;
                 for (int s = 0; s < body->data.block.stmt_count; s++) {
-                    traverse_statement(ctx, body->data.block.statements[s]);
+                    validate_statement(ctx, body->data.block.statements[s]);
                 }
             }
 
-            /* Exit function scope back to global scope */
+            /* Non-void return completeness check */
+            if (decl->data.function.return_type != TYPE_VOID && !ctx->function_has_return) {
+                semantic_error(ctx, decl->line, decl->column, "SEM-12",
+                               "Non-void function requires compatible return");
+            }
+
             ctx->current_scope = scope_exit(ctx->current_scope);
+            ctx->current_function = NULL;
         }
+    }
+
+    /* Verify main entry point exists */
+    if (ctx->main_count == 0) {
+        semantic_error(ctx, 1, 1, "SEM-20",
+                       "Entry point must be int main() (missing main)");
     }
 
     return ctx->error_count;

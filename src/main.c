@@ -2,6 +2,10 @@
 #include <stdlib.h>
 #include "token.h"
 #include "lexer.h"
+#include "parser.h"
+#include "ast.h"
+#include "symbol_table.h"
+#include "semantic.h"
 
 int main(int argc, char *argv[]) {
     /* 1 & 2: Compiler program startup and banner */
@@ -46,5 +50,44 @@ int main(int argc, char *argv[]) {
     printf("Total tokens: %d, Lexical errors: %d\n", token_count, error_count);
 
     lexer_destroy(lexer);
-    return (error_count == 0) ? 0 : 1;
+
+    if (error_count > 0) {
+        return 1;
+    }
+
+    /* 5: Syntax Analysis */
+    printf("\n--- Beginning Syntax Analysis ---\n");
+    Lexer *parse_lexer = lexer_create_from_file(filepath);
+    Parser *parser = parser_create(parse_lexer);
+    ASTNode *ast = parser_parse_program(parser);
+
+    if (!ast || parser->error_count > 0) {
+        fprintf(stderr, "Syntax Analysis Failed: %d error(s)\n", parser->error_count);
+        if (ast) ast_free(ast);
+        parser_destroy(parser);
+        lexer_destroy(parse_lexer);
+        return 1;
+    }
+    printf("--- Syntax Analysis Complete: Valid AST Constructed ---\n");
+
+    /* 6: Semantic Analysis */
+    printf("\n--- Beginning Semantic Analysis ---\n");
+    SemanticContext *sem_ctx = semantic_context_create();
+    int sem_errors = semantic_analyze(sem_ctx, ast);
+
+    if (sem_errors == 0) {
+        printf("--- Semantic Analysis Complete: 0 Errors Found ---\n");
+        printf("\n========================================\n");
+        printf("Compilation Successful: %s validated.\n", filepath);
+        printf("========================================\n");
+    } else {
+        fprintf(stderr, "Semantic Analysis Failed: %d error(s)\n", sem_errors);
+    }
+
+    semantic_context_destroy(sem_ctx);
+    ast_free(ast);
+    parser_destroy(parser);
+    lexer_destroy(parse_lexer);
+
+    return (sem_errors == 0) ? 0 : 1;
 }
