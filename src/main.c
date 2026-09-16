@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "token.h"
 #include "lexer.h"
 #include "parser.h"
@@ -8,22 +9,40 @@
 #include "semantic.h"
 
 int main(int argc, char *argv[]) {
-    /* 1 & 2: Compiler program startup and banner */
+    /* 1 & 2: Compiler banner */
     printf("========================================\n");
     printf("        C Compiler Front-End\n");
     printf("  Frozen Specification Version 1.0\n");
     printf("========================================\n\n");
 
-    /* 3 & 4: Verify whether a source filename argument was supplied */
-    if (argc < 2) {
+    /* Argument parsing */
+    int dump_tokens = 0;
+    const char *filepath = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--tokens") == 0 || strcmp(argv[i], "-v") == 0) {
+            dump_tokens = 1;
+        } else if (argv[i][0] != '-' && filepath == NULL) {
+            filepath = argv[i];
+        } else {
+            fprintf(stderr, "Error: Unknown or unexpected argument '%s'\n", argv[i]);
+            fprintf(stderr, "Usage: %s [--tokens] <source_file.c>\n", argv[0]);
+            return 1;
+        }
+    }
+
+    if (!filepath) {
         fprintf(stderr, "Error: No input source file provided.\n");
-        fprintf(stderr, "Usage: %s <source_file.c>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--tokens] <source_file.c>\n", argv[0]);
         fprintf(stderr, "Example: %s examples/test.c\n", argv[0]);
         return 1;
     }
 
-    const char *filepath = argv[1];
     printf("Source file: %s\n", filepath);
+
+    /* ----------------------------------------------------
+     * STAGE 1: Lexical Analysis
+     * ---------------------------------------------------- */
     printf("--- Beginning Lexical Analysis ---\n");
 
     Lexer *lexer = lexer_create_from_file(filepath);
@@ -38,7 +57,9 @@ int main(int argc, char *argv[]) {
 
     do {
         token = lexer_next_token(lexer);
-        token_print(&token);
+        if (dump_tokens) {
+            token_print(&token);
+        }
         token_count++;
         if (token.type == TOKEN_LEXICAL_ERROR) {
             error_count++;
@@ -52,17 +73,25 @@ int main(int argc, char *argv[]) {
     lexer_destroy(lexer);
 
     if (error_count > 0) {
+        fprintf(stderr, "\nLexical Analysis Failed: %d error(s) found. Halting.\n", error_count);
         return 1;
     }
 
-    /* 5: Syntax Analysis */
+    /* ----------------------------------------------------
+     * STAGE 2: Syntax Analysis (Parser)
+     * ---------------------------------------------------- */
     printf("\n--- Beginning Syntax Analysis ---\n");
     Lexer *parse_lexer = lexer_create_from_file(filepath);
+    if (!parse_lexer) {
+        fprintf(stderr, "Error: Could not re-open source file for parsing.\n");
+        return 1;
+    }
+
     Parser *parser = parser_create(parse_lexer);
     ASTNode *ast = parser_parse_program(parser);
 
     if (!ast || parser->error_count > 0) {
-        fprintf(stderr, "Syntax Analysis Failed: %d error(s)\n", parser->error_count);
+        fprintf(stderr, "\nSyntax Analysis Failed: %d error(s) found. Halting.\n", parser->error_count);
         if (ast) ast_free(ast);
         parser_destroy(parser);
         lexer_destroy(parse_lexer);
@@ -70,24 +99,30 @@ int main(int argc, char *argv[]) {
     }
     printf("--- Syntax Analysis Complete: Valid AST Constructed ---\n");
 
-    /* 6: Semantic Analysis */
+    /* ----------------------------------------------------
+     * STAGE 3: Semantic Analysis
+     * ---------------------------------------------------- */
     printf("\n--- Beginning Semantic Analysis ---\n");
     SemanticContext *sem_ctx = semantic_context_create();
     int sem_errors = semantic_analyze(sem_ctx, ast);
 
+    int exit_code = 0;
     if (sem_errors == 0) {
         printf("--- Semantic Analysis Complete: 0 Errors Found ---\n");
         printf("\n========================================\n");
         printf("Compilation Successful: %s validated.\n", filepath);
         printf("========================================\n");
+        exit_code = 0;
     } else {
-        fprintf(stderr, "Semantic Analysis Failed: %d error(s)\n", sem_errors);
+        fprintf(stderr, "\nSemantic Analysis Failed: %d error(s) found.\n", sem_errors);
+        exit_code = 1;
     }
 
+    /* Clean up all allocated compiler resources */
     semantic_context_destroy(sem_ctx);
     ast_free(ast);
     parser_destroy(parser);
     lexer_destroy(parse_lexer);
 
-    return (sem_errors == 0) ? 0 : 1;
+    return exit_code;
 }

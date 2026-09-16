@@ -1,0 +1,9 @@
+int x = 100;
+
+int main() {
+    int x = 10;
+    {
+        int x = 1;
+    }
+    return x;
+}

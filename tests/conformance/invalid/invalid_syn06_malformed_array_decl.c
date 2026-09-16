@@ -1,0 +1,4 @@
+int main() {
+    int arr[;
+    return 0;
+}
