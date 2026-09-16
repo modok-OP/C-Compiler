@@ -84,7 +84,7 @@ typedef enum {
  */
 typedef struct {
     TokenType type;
-    const char *lexeme;     /* Lexeme string representation */
+    const char *lexeme;     /* Lexeme string representation (heap-allocated) */
     int line;               /* 1-based source line number */
     int column;             /* 1-based source column number */
 } Token;
@@ -96,8 +96,14 @@ typedef struct {
 /* Returns human-readable string representation of a token type enum */
 const char *token_type_name(TokenType type);
 
-/* Constructs and returns a Token value */
+/* Constructs and returns a Token value (allocates a copy of lexeme) */
 Token token_create(TokenType type, const char *lexeme, int line, int column);
+
+/* Constructs and returns a Token value from a buffer slice of given length */
+Token token_create_len(TokenType type, const char *start, int len, int line, int column);
+
+/* Frees heap-allocated resources in a Token */
+void token_free(Token *token);
 
 /* Prints token details in readable diagnostic format */
 void token_print(const Token *token);

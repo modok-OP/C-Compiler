@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "token.h"
+#include "lexer.h"
 
 int main(int argc, char *argv[]) {
     /* 1 & 2: Compiler program startup and banner */
@@ -17,11 +18,33 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Source file supplied - acknowledge without compiling */
-    printf("Source file: %s\n", argv[1]);
-    printf("Front-end foundation initialized successfully.\n");
-    printf("No compilation performed (Foundation stage).\n");
+    const char *filepath = argv[1];
+    printf("Source file: %s\n", filepath);
+    printf("--- Beginning Lexical Analysis ---\n");
 
-    /* 5: Exit cleanly */
-    return 0;
+    Lexer *lexer = lexer_create_from_file(filepath);
+    if (!lexer) {
+        fprintf(stderr, "Error: Could not open or read source file '%s'.\n", filepath);
+        return 1;
+    }
+
+    int token_count = 0;
+    int error_count = 0;
+    Token token;
+
+    do {
+        token = lexer_next_token(lexer);
+        token_print(&token);
+        token_count++;
+        if (token.type == TOKEN_LEXICAL_ERROR) {
+            error_count++;
+        }
+        token_free(&token);
+    } while (token.type != TOKEN_EOF);
+
+    printf("--- Lexical Analysis Complete ---\n");
+    printf("Total tokens: %d, Lexical errors: %d\n", token_count, error_count);
+
+    lexer_destroy(lexer);
+    return (error_count == 0) ? 0 : 1;
 }

@@ -1,5 +1,7 @@
 #include "token.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 const char *token_type_name(TokenType type) {
     switch (type) {
@@ -78,13 +80,42 @@ const char *token_type_name(TokenType type) {
     }
 }
 
+static char *allocate_string(const char *start, size_t len) {
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) {
+        fprintf(stderr, "Fatal error: Out of memory while allocating token lexeme.\n");
+        exit(1);
+    }
+    if (len > 0 && start) {
+        memcpy(copy, start, len);
+    }
+    copy[len] = '\0';
+    return copy;
+}
+
 Token token_create(TokenType type, const char *lexeme, int line, int column) {
     Token token;
     token.type = type;
-    token.lexeme = lexeme;
+    token.lexeme = lexeme ? allocate_string(lexeme, strlen(lexeme)) : allocate_string("", 0);
     token.line = line;
     token.column = column;
     return token;
+}
+
+Token token_create_len(TokenType type, const char *start, int len, int line, int column) {
+    Token token;
+    token.type = type;
+    token.lexeme = allocate_string(start, len > 0 ? (size_t)len : 0);
+    token.line = line;
+    token.column = column;
+    return token;
+}
+
+void token_free(Token *token) {
+    if (token && token->lexeme) {
+        free((void *)token->lexeme);
+        token->lexeme = NULL;
+    }
 }
 
 void token_print(const Token *token) {
