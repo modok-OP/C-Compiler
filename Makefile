@@ -16,6 +16,8 @@ TEST_SCOPE = $(BUILDDIR)/test_scope_analysis.exe
 TEST_TYPE = $(BUILDDIR)/test_type_system.exe
 TEST_SEM = $(BUILDDIR)/test_semantic_analyzer.exe
 TEST_FULL = $(BUILDDIR)/test_full_semantic.exe
+TEST_IO = $(BUILDDIR)/test_io_semantics.exe
+
 
 # Sources, Headers, and Objects
 SRCS = $(wildcard $(SRCDIR)/*.c)
@@ -78,7 +80,7 @@ $(TEST_SYM): tests/semantic/test_symbol_table.c $(BUILDDIR)/symbol_table.o $(BUI
 test_scope_analysis: $(TEST_SCOPE)
 	$(TEST_SCOPE)
 
-$(TEST_SCOPE): tests/semantic/test_scope_analysis.c $(BUILDDIR)/semantic.o $(BUILDDIR)/symbol_table.o $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
+$(TEST_SCOPE): tests/semantic/test_scope_analysis.c $(BUILDDIR)/semantic.o $(BUILDDIR)/symbol_table.o $(BUILDDIR)/type_system.o $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
@@ -106,6 +108,14 @@ $(TEST_FULL): tests/semantic/test_full_semantic.c $(BUILDDIR)/semantic.o $(BUILD
 	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
+# Build and run I/O Semantic test
+test_io_semantics: $(TEST_IO)
+	$(TEST_IO)
+
+$(TEST_IO): tests/semantic/test_io_semantics.c $(BUILDDIR)/semantic.o $(BUILDDIR)/symbol_table.o $(BUILDDIR)/type_system.o $(BUILDDIR)/parser.o $(BUILDDIR)/ast.o $(BUILDDIR)/lexer.o $(BUILDDIR)/token.o
+	@if not exist $(BUILDDIR) mkdir $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
 # Clean target
 clean:
 	-cmd /c "if exist $(BUILDDIR)\*.o del /q /f $(BUILDDIR)\*.o"
@@ -113,4 +123,5 @@ clean:
 	-cmd /c "if exist $(TARGET) del /q /f $(TARGET)"
 	@echo Clean complete.
 
-.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis test_type_system test_semantic_analyzer test_full_semantic
+.PHONY: all clean test_ast test_expressions test_statements test_program test_symbol_table test_scope_analysis test_type_system test_semantic_analyzer test_full_semantic test_io_semantics
+

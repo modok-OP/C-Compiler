@@ -62,6 +62,315 @@ void semantic_context_destroy(SemanticContext *ctx) {
 
 /* Forward declarations */
 static void validate_statement(SemanticContext *ctx, const ASTNode *stmt);
+SemType semantic_check_expression(SemanticContext *ctx, const ASTNode *expr);
+
+/*
+ * =========================================================================
+ * Stage 10: Printf / Scanf Semantic Checking
+ * =========================================================================
+ */
+
+typedef struct {
+    char spec;      /* 'd', 'f', 'c', 's', or '\0' if unsupported */
+    char raw_char;  /* character after '%' */
+    int is_valid;   /* 1 if valid supported specifier, 0 if unsupported */
+} FormatSpec;
+
+#define MAX_FORMAT_SPECS 128
+
+static int parse_format_string(SemanticContext *ctx, const ASTNode *fmt_node, int is_scanf,
+                               FormatSpec *specs, int max_specs, int *out_count) {
+    *out_count = 0;
+    if (!fmt_node) return 0;
+
+    if (fmt_node->kind != AST_LITERAL || fmt_node->data.literal.literal_type != LITERAL_STRING) {
+        semantic_error(ctx, fmt_node->line, fmt_node->column, is_scanf ? "SEM-18" : "SEM-17",
+                       "%s requires string literal format as first argument",
+                       is_scanf ? "scanf" : "printf");
+        return -1;
+    }
+
+    const char *str = fmt_node->data.literal.val.string_val;
+    if (!str) str = "";
+
+    int count = 0;
+    int has_error = 0;
+    int i = 0;
+
+    while (str[i] != '\0') {
+        if (str[i] == '%') {
+            i++;
+            if (str[i] == '%') {
+                /* Escaped literal percent sign, takes no argument */
+                i++;
+                continue;
+            }
+            if (str[i] == '\0') {
+                semantic_error(ctx, fmt_node->line, fmt_node->column, is_scanf ? "SEM-18" : "SEM-17",
+                               "Incomplete format specifier at end of %s format string",
+                               is_scanf ? "scanf" : "printf");
+                has_error = 1;
+                break;
+            }
+
+            char c = str[i];
+            int valid = 0;
+
+            if (!is_scanf) {
+                /* printf supports %d, %f, %c, %s */
+                if (c == 'd' || c == 'f' || c == 'c' || c == 's') {
+                    valid = 1;
+                }
+            } else {
+                /* scanf supports %d, %f, %c (%s is NOT supported) */
+                if (c == 'd' || c == 'f' || c == 'c') {
+                    valid = 1;
+                }
+            }
+
+            if (!valid) {
+                semantic_error(ctx, fmt_node->line, fmt_node->column, is_scanf ? "SEM-18" : "SEM-17",
+                               "Unsupported %s format specifier '%%%c'",
+                               is_scanf ? "scanf" : "printf", c);
+                has_error = 1;
+            }
+
+            if (count < max_specs) {
+                specs[count].spec = valid ? c : '\0';
+                specs[count].raw_char = c;
+                specs[count].is_valid = valid;
+                count++;
+            }
+            i++;
+        } else {
+            i++;
+        }
+    }
+
+    *out_count = count;
+    return has_error ? 1 : 0;
+}
+
+static SemType validate_printf_call(SemanticContext *ctx, const ASTNode *call) {
+    int arg_count = call->data.call.arg_count;
+    ASTNode **args = call->data.call.args;
+
+    if (arg_count < 1) {
+        semantic_error(ctx, call->line, call->column, "SEM-17",
+                       "printf requires at least one argument (format string)");
+        return SEM_TYPE_INT;
+    }
+
+    FormatSpec specs[MAX_FORMAT_SPECS];
+    int spec_count = 0;
+    int parse_res = parse_format_string(ctx, args[0], 0, specs, MAX_FORMAT_SPECS, &spec_count);
+
+    if (parse_res == -1) {
+        /* First arg is not string literal. Evaluate all arguments to resolve symbols. */
+        for (int i = 0; i < arg_count; i++) {
+            semantic_check_expression(ctx, args[i]);
+        }
+        return SEM_TYPE_INT;
+    }
+
+    int passed_args = arg_count - 1;
+
+    /* Check argument count */
+    if (passed_args != spec_count) {
+        semantic_error(ctx, call->line, call->column, "SEM-17",
+                       "printf format requires %d argument(s), got %d",
+                       spec_count, passed_args);
+    }
+
+    /* Check argument types */
+    int check_count = (passed_args < spec_count) ? passed_args : spec_count;
+    for (int i = 0; i < check_count; i++) {
+        ASTNode *arg = args[i + 1];
+        SemType arg_t = semantic_check_expression(ctx, arg);
+
+        if (!specs[i].is_valid) {
+            /* Unsupported specifier error was already reported */
+            continue;
+        }
+
+        if (arg_t == SEM_TYPE_ERROR) {
+            continue;
+        }
+
+        switch (specs[i].spec) {
+            case 'd':
+                if (arg_t != SEM_TYPE_INT) {
+                    semantic_error(ctx, arg->line, arg->column, "SEM-17",
+                                   "%%d requires int argument");
+                }
+                break;
+            case 'f':
+                if (arg_t != SEM_TYPE_FLOAT) {
+                    semantic_error(ctx, arg->line, arg->column, "SEM-17",
+                                   "%%f requires float argument");
+                }
+                break;
+            case 'c':
+                if (arg_t != SEM_TYPE_CHAR) {
+                    semantic_error(ctx, arg->line, arg->column, "SEM-17",
+                                   "%%c requires char argument");
+                }
+                break;
+            case 's':
+                if (arg->kind != AST_LITERAL || arg->data.literal.literal_type != LITERAL_STRING || arg_t != SEM_TYPE_STRING) {
+                    semantic_error(ctx, arg->line, arg->column, "SEM-17",
+                                   "%%s requires string literal argument");
+                }
+                break;
+        }
+    }
+
+    /* Evaluate any extra arguments passed beyond spec_count to resolve symbols */
+    for (int i = check_count; i < passed_args; i++) {
+        semantic_check_expression(ctx, args[i + 1]);
+    }
+
+    return SEM_TYPE_INT;
+}
+
+static SemType validate_scanf_call(SemanticContext *ctx, const ASTNode *call) {
+    int arg_count = call->data.call.arg_count;
+    ASTNode **args = call->data.call.args;
+
+    if (arg_count < 1) {
+        semantic_error(ctx, call->line, call->column, "SEM-18",
+                       "scanf requires at least one argument (format string)");
+        return SEM_TYPE_INT;
+    }
+
+    FormatSpec specs[MAX_FORMAT_SPECS];
+    int spec_count = 0;
+    int parse_res = parse_format_string(ctx, args[0], 1, specs, MAX_FORMAT_SPECS, &spec_count);
+
+    if (parse_res == -1) {
+        /* First arg is not string literal. Evaluate all arguments to resolve symbols. */
+        for (int i = 0; i < arg_count; i++) {
+            semantic_check_expression(ctx, args[i]);
+        }
+        return SEM_TYPE_INT;
+    }
+
+    int passed_args = arg_count - 1;
+
+    /* Check destination count */
+    if (passed_args != spec_count) {
+        semantic_error(ctx, call->line, call->column, "SEM-18",
+                       "scanf format requires %d destination(s), got %d",
+                       spec_count, passed_args);
+    }
+
+    /* Validate each passed destination */
+    int check_count = (passed_args < spec_count) ? passed_args : spec_count;
+    for (int i = 0; i < check_count; i++) {
+        ASTNode *dest = args[i + 1];
+
+        /* Destination MUST be &identifier */
+        if (dest->kind != AST_UNARY_EXPR || dest->data.unary_expr.op != TOKEN_AMPERSAND) {
+            semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                           "scanf destination must be in the form &identifier");
+            semantic_check_expression(ctx, dest);
+            continue;
+        }
+
+        ASTNode *id_node = dest->data.unary_expr.operand;
+        if (!id_node || id_node->kind != AST_IDENTIFIER) {
+            semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                           "scanf destination must be in the form &identifier");
+            if (id_node) {
+                semantic_check_expression(ctx, id_node);
+            }
+            continue;
+        }
+
+        const char *var_name = id_node->data.identifier.name;
+        Symbol *var_sym = scope_lookup(ctx->current_scope, var_name);
+        if (!var_sym) {
+            if (symbol_exists_in_any_scope(ctx->global_scope, var_name)) {
+                semantic_error(ctx, id_node->line, id_node->column, "SEM-03",
+                               "Identifier '%s' is out of scope", var_name);
+            } else {
+                semantic_error(ctx, id_node->line, id_node->column, "SEM-01",
+                               "Identifier '%s' is not declared", var_name);
+            }
+            continue;
+        }
+
+        if (var_sym->kind != SYMBOL_VARIABLE && var_sym->kind != SYMBOL_PARAMETER) {
+            semantic_error(ctx, id_node->line, id_node->column, "SEM-18",
+                           "scanf destination '%s' must be a variable", var_name);
+            continue;
+        }
+
+        if (var_sym->is_array) {
+            semantic_error(ctx, id_node->line, id_node->column, "SEM-18",
+                           "scanf destination '%s' cannot be an array", var_name);
+            continue;
+        }
+
+        if (!specs[i].is_valid) {
+            /* Unsupported specifier error was already reported */
+            continue;
+        }
+
+        switch (specs[i].spec) {
+            case 'd':
+                if (var_sym->type != TYPE_INT) {
+                    semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                                   "%%d requires int destination");
+                }
+                break;
+            case 'f':
+                if (var_sym->type != TYPE_FLOAT) {
+                    semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                                   "%%f requires float destination");
+                }
+                break;
+            case 'c':
+                if (var_sym->type != TYPE_CHAR) {
+                    semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                                   "%%c requires char destination");
+                }
+                break;
+        }
+    }
+
+    /* Evaluate any extra destination arguments beyond spec_count */
+    for (int i = check_count; i < passed_args; i++) {
+        ASTNode *dest = args[i + 1];
+        if (dest->kind != AST_UNARY_EXPR || dest->data.unary_expr.op != TOKEN_AMPERSAND) {
+            semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                           "scanf destination must be in the form &identifier");
+            semantic_check_expression(ctx, dest);
+        } else {
+            ASTNode *id_node = dest->data.unary_expr.operand;
+            if (!id_node || id_node->kind != AST_IDENTIFIER) {
+                semantic_error(ctx, dest->line, dest->column, "SEM-18",
+                               "scanf destination must be in the form &identifier");
+                if (id_node) semantic_check_expression(ctx, id_node);
+            } else {
+                const char *var_name = id_node->data.identifier.name;
+                Symbol *var_sym = scope_lookup(ctx->current_scope, var_name);
+                if (!var_sym) {
+                    if (symbol_exists_in_any_scope(ctx->global_scope, var_name)) {
+                        semantic_error(ctx, id_node->line, id_node->column, "SEM-03",
+                                       "Identifier '%s' is out of scope", var_name);
+                    } else {
+                        semantic_error(ctx, id_node->line, id_node->column, "SEM-01",
+                                       "Identifier '%s' is not declared", var_name);
+                    }
+                }
+            }
+        }
+    }
+
+    return SEM_TYPE_INT;
+}
+
 
 /*
  * Expression Type Inference Visitor
@@ -229,8 +538,12 @@ SemType semantic_check_expression(SemanticContext *ctx, const ASTNode *expr) {
             }
 
             if (op == TOKEN_AMPERSAND) {
-                /* & is valid for scanf destination, check operand */
-                return semantic_check_expression(ctx, operand);
+                semantic_error(ctx, expr->line, expr->column, "SEM-18",
+                               "Address-of operator '&' is restricted to scanf destination notation only");
+                if (operand) {
+                    semantic_check_expression(ctx, operand);
+                }
+                return SEM_TYPE_ERROR;
             }
 
             return SEM_TYPE_ERROR;
@@ -302,6 +615,11 @@ SemType semantic_check_expression(SemanticContext *ctx, const ASTNode *expr) {
 
             /* Predefined function (printf, scanf) */
             if (func_sym->kind == SYMBOL_PREDEFINED_FUNCTION) {
+                if (strcmp(callee, "printf") == 0) {
+                    return validate_printf_call(ctx, expr);
+                } else if (strcmp(callee, "scanf") == 0) {
+                    return validate_scanf_call(ctx, expr);
+                }
                 for (int i = 0; i < expr->data.call.arg_count; i++) {
                     semantic_check_expression(ctx, expr->data.call.args[i]);
                 }
